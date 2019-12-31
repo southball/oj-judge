@@ -1,0 +1,22 @@
+version: "3"
+services:
+  judge1:
+    build: .
+    privileged: true
+    volumes:
+      - ./config1.json:/app/config.json
+  judge2:
+    build: .
+    privileged: true
+    volumes:
+      - ./config2.json:/app/config.json
+  judge3:
+    build: .
+    privileged: true
+    volumes:
+      - ./config3.json:/app/config.json
+  judge4:
+    build: .
+    privileged: true
+    volumes:
+      - ./config4.json:/app/config.json
