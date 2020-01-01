@@ -7,8 +7,16 @@ const util = require("util");
 const moment = require("moment");
 const judgeConfig = require("./config.json");
 
-log = (message, ...args) => {
+const log = (message, ...args) => {
   console.log("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
+};
+
+const time = (message, ...args) => {
+  console.time("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
+};
+
+const timeEnd = (message, ...args) => {
+  console.timeEnd("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
 };
 
 const genUrl = (...parts) =>
@@ -79,7 +87,7 @@ async function loop() {
       log("Job %d received.", job.id);
       const sandboxPath = await initSandbox();
       log("Sandbox initialized at %s", sandboxPath);
-      const resolveSandbox = location => path.resolve(sandboxPath, "box", location);
+      const resolveSandbox = (...location) => path.resolve(sandboxPath, "box", ...location);
 
       log("Fetching test case input.");
       const testcaseInput = (
@@ -187,24 +195,51 @@ async function loop() {
         throw new Error();
       }
 
+      log("Creating tests folder.");
+      fs.mkdirSync(resolveSandbox("tests"));
+      log("Tests folder created.");
+      log("Predownloading all test cases.");
+      const promises = [];
+      for (const [infile, ansfile] of testcases) {
+        promises.push(
+          api("judger/file", {
+            file: `${job.submission.problem.id}/${infile}`
+          })
+            .then(content => writeFile(resolveSandbox("tests", infile), content))
+            .then(() => {
+              log(`Downloaded ${infile}.`);
+            })
+        );
+        promises.push(
+          api("judger/file", {
+            file: `${job.submission.problem.id}/${ansfile}`
+          })
+            .then(content => writeFile(resolveSandbox("tests", ansfile), content))
+            .then(() => {
+              log(`Downloaded ${ansfile}.`);
+            })
+        );
+      }
+
+      await Promise.all(promises);
+
       // Process the test cases one by one.
       log("Begin processing test case.");
       for (const [infile, ansfile] of testcases) {
         log("Process test case %s, %s", infile, ansfile);
-        log("Download %s to %s...", `${job.submission.problem.id}/${infile}`, resolveSandbox("in"));
-        await writeFile(
-          resolveSandbox("in"),
-          await api("judger/file", {
-            file: `${job.submission.problem.id}/${infile}`
-          })
-        );
 
         let caseVerdict = "AC";
         const meta = resolveSandbox("meta");
+        console.log(meta);
+
+        time(`Program for ${infile}`);
         if (language === "cpp") {
-          await runProcess(`isolate --cg --meta="${meta}" --mem=256000 --time=1 --stdin=in --stdout=out --run program`);
+          await runProcess(
+            `isolate --cg --meta="${meta}" --mem=256000 --time=1 --stdin="tests/${infile}" --stdout=out --run program`
+          );
         } else if (language === "py3") {
         }
+        timeEnd(`Program for ${infile}`);
 
         log("Reading meta file...");
         const metaFile = await readFile(resolveSandbox("meta"), {
@@ -220,20 +255,13 @@ async function loop() {
 
         log("Meta file content:\n%s", metaFile);
 
-        // Download answer for checker.
-        log("Download %s to %s...", `${job.submission.problem.id}/${ansfile}`, resolveSandbox("ans"));
-        await writeFile(
-          resolveSandbox("ans"),
-          await api("judger/file", {
-            file: `${job.submission.problem.id}/${ansfile}`
-          })
-        );
-        log("Running program...");
-
-        log("Running checker...");
+        time(`Checker for ${infile}`);
         const [checkerMessage] = await runProcess(
-          "isolate --cg --mem=256000 --time=1 --stderr-to-stdout --run checker in out ans"
+          `${resolveSandbox("checker")} "tests/${infile}" out "tests/${ansfile}"`
         );
+        timeEnd(`Checker for ${infile}`);
+
+        time(`Postprocessing for ${infile}`);
         log("Test case %s: %s", infile, checkerMessage);
 
         const outputHeader = fs.existsSync(resolveSandbox("out"))
@@ -265,11 +293,12 @@ async function loop() {
 
         console.log("Entry: %s", JSON.stringify(tests[infile]));
 
-        await api("judger/set", {
-          id: job.id,
-          verdict,
-          judgerOutput: JSON.stringify({ tests })
-        });
+        // await api("judger/set", {
+        //   id: job.id,
+        //   verdict,
+        //   judgerOutput: JSON.stringify({ tests })
+        // });
+        timeEnd(`Postprocessing for ${infile}`);
       }
 
       if (verdict === "WJ") verdict = "AC";
