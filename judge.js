@@ -8,11 +8,7 @@ const moment = require("moment");
 const judgeConfig = require("./config.json");
 
 log = (message, ...args) => {
-  console.log(
-    "[%s] " + message,
-    moment().format("YYYY-MM-DD hh:mm:ss"),
-    ...args
-  );
+  console.log("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
 };
 
 const genUrl = (...parts) =>
@@ -59,9 +55,7 @@ async function judgeServer() {
   await runProcess(
     "isolate --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o test test.cpp"
   );
-  const [stdout] = await runProcess(
-    "isolate --cg --mem=256000 --time=1 --run test"
-  );
+  const [stdout] = await runProcess("isolate --cg --mem=256000 --time=1 --run test");
 
   log(stdout);
 }
@@ -85,8 +79,7 @@ async function loop() {
       log("Job %d received.", job.id);
       const sandboxPath = await initSandbox();
       log("Sandbox initialized at %s", sandboxPath);
-      const resolveSandbox = location =>
-        path.resolve(sandboxPath, "box", location);
+      const resolveSandbox = location => path.resolve(sandboxPath, "box", location);
 
       log("Fetching test case input.");
       const testcaseInput = (
@@ -115,7 +108,10 @@ async function loop() {
 
       const tests = {};
 
-      let verdict = "AC";
+      /**
+       * The current verdict for the whole submission.
+       */
+      let verdict = "WJ";
 
       for (const [infile] of testcases) {
         tests[infile] = { verdict: "WJ", message: "" };
@@ -133,18 +129,9 @@ async function loop() {
       const writeFile = util.promisify(fs.writeFile);
       const readFile = util.promisify(fs.readFile);
 
-      console.log(
-        "Download resource/checker.cpp to %s",
-        resolveSandbox("checker.cpp")
-      );
-      await writeFile(
-        resolveSandbox("checker.cpp"),
-        await api("judger/file", { file: "resource/checker.cpp" })
-      );
-      await writeFile(
-        resolveSandbox("testlib.h"),
-        await api("judger/file", { file: "resource/testlib.h" })
-      );
+      console.log("Download resource/checker.cpp to %s", resolveSandbox("checker.cpp"));
+      await writeFile(resolveSandbox("checker.cpp"), await api("judger/file", { file: "resource/checker.cpp" }));
+      await writeFile(resolveSandbox("testlib.h"), await api("judger/file", { file: "resource/testlib.h" }));
       await runProcess(
         "isolate --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o checker checker.cpp"
       );
@@ -183,9 +170,7 @@ async function loop() {
             verdict: "CE",
             judgerOutput: JSON.stringify({
               tests,
-              message: (await readFile(resolveSandbox("compile.out"))).toString(
-                "utf8"
-              )
+              message: (await readFile(resolveSandbox("compile.out"))).toString("utf8")
             })
           });
           throw new Error();
@@ -206,11 +191,7 @@ async function loop() {
       log("Begin processing test case.");
       for (const [infile, ansfile] of testcases) {
         log("Process test case %s, %s", infile, ansfile);
-        log(
-          "Download %s to %s...",
-          `${job.submission.problem.id}/${infile}`,
-          resolveSandbox("in")
-        );
+        log("Download %s to %s...", `${job.submission.problem.id}/${infile}`, resolveSandbox("in"));
         await writeFile(
           resolveSandbox("in"),
           await api("judger/file", {
@@ -218,11 +199,10 @@ async function loop() {
           })
         );
 
+        let caseVerdict = "AC";
         const meta = resolveSandbox("meta");
         if (language === "cpp") {
-          await runProcess(
-            `isolate --cg --meta="${meta}" --mem=256000 --time=1 --stdin=in --stdout=out --run program`
-          );
+          await runProcess(`isolate --cg --meta="${meta}" --mem=256000 --time=1 --stdin=in --stdout=out --run program`);
         } else if (language === "py3") {
         }
 
@@ -241,11 +221,7 @@ async function loop() {
         log("Meta file content:\n%s", metaFile);
 
         // Download answer for checker.
-        log(
-          "Download %s to %s...",
-          `${job.submission.problem.id}/${ansfile}`,
-          resolveSandbox("ans")
-        );
+        log("Download %s to %s...", `${job.submission.problem.id}/${ansfile}`, resolveSandbox("ans"));
         await writeFile(
           resolveSandbox("ans"),
           await api("judger/file", {
@@ -261,18 +237,21 @@ async function loop() {
         log("Test case %s: %s", infile, checkerMessage);
 
         const outputHeader = fs.existsSync(resolveSandbox("out"))
-          ? (
-              await readFile(resolveSandbox("out"), { encoding: "utf8" })
-            ).substr(0, 1024)
+          ? (await readFile(resolveSandbox("out"), { encoding: "utf8" })).substr(0, 1024)
           : "";
 
-        if (metaEntries.status === "RE") verdict = "RE";
+        if (metaEntries.status === "RE") caseVerdict = "RE";
         // Not 100% sure
-        else if (metaEntries.status === "SG") verdict = "MLE";
-        else if (metaEntries.status === "TO") verdict = "TLE";
+        else if (metaEntries.status === "SG") caseVerdict = "MLE";
+        else if (metaEntries.status === "TO") caseVerdict = "TLE";
+
+        if (caseVerdict === "AC") {
+          // Read checker message
+          if (!checkerMessage.startsWith("ok")) caseVerdict = "WA";
+        }
 
         tests[infile] = {
-          verdict,
+          verdict: caseVerdict,
           meta: metaFile.trim(),
           message: checkerMessage.substr(),
           output: outputHeader,
@@ -280,13 +259,20 @@ async function loop() {
           memory: +metaEntries["max-rss"]
         };
 
+        if (caseVerdict !== "AC" && verdict === "WJ") {
+          verdict = caseVerdict;
+        }
+
         console.log("Entry: %s", JSON.stringify(tests[infile]));
 
         await api("judger/set", {
           id: job.id,
+          verdict,
           judgerOutput: JSON.stringify({ tests })
         });
       }
+
+      if (verdict === "WJ") verdict = "AC";
 
       console.log("Finished.");
       await api("judger/set", {
