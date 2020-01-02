@@ -1,22 +1,25 @@
 const fs = require("fs");
-const process = require("child_process");
+const child_process = require("child_process");
 const path = require("path");
 const request = require("request-promise-native");
 const url = require("url");
 const util = require("util");
 const moment = require("moment");
-const judgeConfig = require("./config.json");
+
+const configFilename =
+  process.argv[2] && fs.existsSync(path.resolve(process.argv[2])) ? path.resolve(process.argv[2]) : "./config.json";
+const judgeConfig = require(configFilename);
 
 const log = (message, ...args) => {
-  console.log("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
+  console.log(`[${moment().format("YYYY-MM-DD hh:mm:ss")}] ` + message, ...args);
 };
 
 const time = (message, ...args) => {
-  console.time("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
+  console.time(message, ...args);
 };
 
 const timeEnd = (message, ...args) => {
-  console.timeEnd("[%s] " + message, moment().format("YYYY-MM-DD hh:mm:ss"), ...args);
+  console.timeEnd(message, ...args);
 };
 
 const genUrl = (...parts) =>
@@ -36,15 +39,15 @@ const api = (relUrl, body = {}, config = {}) =>
 
 async function runProcess(cmd, trim = true) {
   return new Promise((resolve, reject) => {
-    process.exec(cmd, {}, (error, stdout, stderr) => {
+    child_process.exec(cmd, {}, (error, stdout, stderr) => {
       resolve([trim ? stdout.trim() : stdout, trim ? stderr.trim() : stderr]);
     });
   });
 }
 
 async function judgeServer() {
-  await runProcess("isolate --cg --cleanup");
-  const [sandboxPath] = await runProcess("isolate --cg --init");
+  await runProcess(`isolate --box-id=${judgeConfig.box_id} --cg --cleanup`);
+  const [sandboxPath] = await runProcess(`isolate --box-id=${judgeConfig.box_id} --cg --init`);
 
   log(`Sandbox initialized in ${sandboxPath}.`);
 
@@ -61,16 +64,16 @@ async function judgeServer() {
   );
 
   await runProcess(
-    "isolate --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o test test.cpp"
+    `isolate --box-id=${judgeConfig.box_id} --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o test test.cpp`
   );
-  const [stdout] = await runProcess("isolate --cg --mem=256000 --time=1 --run test");
+  const [stdout] = await runProcess(`isolate --box-id=${judgeConfig.box_id} --cg --mem=256000 --time=1 --run test`);
 
   log(stdout);
 }
 
 async function initSandbox() {
-  await runProcess("isolate --cg --cleanup");
-  const [sandboxPath] = await runProcess("isolate --cg --no-cg-timing --init");
+  await runProcess(`isolate --box-id=${judgeConfig.box_id} --cg --cleanup`);
+  const [sandboxPath] = await runProcess(`isolate --box-id=${judgeConfig.box_id} --cg --no-cg-timing --init`);
 
   return sandboxPath;
 }
@@ -141,7 +144,7 @@ async function loop() {
       await writeFile(resolveSandbox("checker.cpp"), await api("judger/file", { file: "resource/checker.cpp" }));
       await writeFile(resolveSandbox("testlib.h"), await api("judger/file", { file: "resource/testlib.h" }));
       await runProcess(
-        "isolate --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o checker checker.cpp"
+        `isolate --box-id=${judgeConfig.box_id} --cg --mem=256000 --time=30 --wall-time=45 --full-env --processes=0 --run -- /usr/bin/g++ -o checker checker.cpp`
       );
 
       if (fs.existsSync(resolveSandbox("checker"))) {
@@ -164,7 +167,7 @@ async function loop() {
         await writeFile(resolveSandbox("program.cpp"), code);
         try {
           await runProcess(
-            "isolate --silent --cg --mem=256000 --time=30 --wall-time=45 --full-env --stderr compile.out --processes=0 --run -- /usr/bin/g++ -o program program.cpp"
+            `isolate --box-id=${judgeConfig.box_id} --silent --cg --mem=256000 --time=30 --wall-time=45 --full-env --stderr compile.out --processes=0 --run -- /usr/bin/g++ -o program program.cpp`
           );
           if (fs.existsSync(resolveSandbox("program"))) {
             log("Compiled C++ program.");
@@ -235,7 +238,7 @@ async function loop() {
         time(`Program for ${infile}`);
         if (language === "cpp") {
           await runProcess(
-            `isolate --cg --meta="${meta}" --mem=256000 --time=1 --stdin="tests/${infile}" --stdout=out --run program`
+            `isolate --box-id=${judgeConfig.box_id} --cg --meta="${meta}" --mem=256000 --time=1 --stdin="tests/${infile}" --stdout=out --run program`
           );
         } else if (language === "py3") {
         }
@@ -257,7 +260,7 @@ async function loop() {
 
         time(`Checker for ${infile}`);
         const [checkerMessage] = await runProcess(
-          `${resolveSandbox("checker")} "tests/${infile}" out "tests/${ansfile}"`
+          `isolate --box-id=${judgeConfig.box_id} --cg --mem=256000 --time=1 --stderr-to-stdout --run checker "tests/${infile}" out "tests/${ansfile}"`
         );
         timeEnd(`Checker for ${infile}`);
 
@@ -293,11 +296,11 @@ async function loop() {
 
         console.log("Entry: %s", JSON.stringify(tests[infile]));
 
-        // await api("judger/set", {
-        //   id: job.id,
-        //   verdict,
-        //   judgerOutput: JSON.stringify({ tests })
-        // });
+        await api("judger/set", {
+          id: job.id,
+          verdict,
+          judgerOutput: JSON.stringify({ tests })
+        });
         timeEnd(`Postprocessing for ${infile}`);
       }
 
